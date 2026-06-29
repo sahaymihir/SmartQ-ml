@@ -1,0 +1,16 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pid
+
+# Local run artifacts
+logs/
+results/
+reports/
+
+# Dataset CSVs — not tracked (hackathon/Kaggle data, kept local only)
+data/*.csv
+
+# Keep models/ tracked — this is an ML showcase repo.

@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Interactive testing playground and clinical dashboard for the SmartQ ML Triage and routing engine. Test vitals, safety guardrails, and queue routing.">
+    <title>SmartQ ML Clinical Playground</title>
+    <!-- Google Fonts: Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-brand">
+            <div class="brand-logo">
+                <i data-lucide="activity" class="logo-icon animate-pulse"></i>
+            </div>
+            <div class="brand-text">
+                <h1>SmartQ Clinical <span class="accent-text">Playground</span></h1>
+                <p class="subtitle">ML Triage, Specialty Routing & Diagnostics Sandbox</p>
+            </div>
+        </div>
+        <div class="header-status">
+            <div class="status-badge" id="api-status-badge">
+                <span class="status-indicator ping" id="api-ping"></span>
+                <span class="status-text" id="api-status-text">Checking ML Service...</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="app-layout">
+        <!-- Preset Cases Toolbar -->
+        <section class="presets-section" aria-label="Preset Cases Selection">
+            <div class="presets-container">
+                <span class="presets-label"><i data-lucide="sparkles"></i> Load Preset Case:</span>
+                <div class="presets-buttons">
+                    <button type="button" class="preset-btn" id="preset-asthma" data-preset="asthma">
+                        <i data-lucide="wind"></i> Critical Asthma
+                    </button>
+                    <button type="button" class="preset-btn" id="preset-chest-pain" data-preset="chestPain">
+                        <i data-lucide="heart-pulse"></i> Cardiac Chest Pain
+                    </button>
+                    <button type="button" class="preset-btn" id="preset-stroke" data-preset="stroke">
+                        <i data-lucide="brain"></i> Stroke Alert
+                    </button>
+                    <button type="button" class="preset-btn" id="preset-pediatric" data-preset="pediatric">
+                        <i data-lucide="baby"></i> Pediatric Fever
+                    </button>
+                    <button type="button" class="preset-btn" id="preset-sprain" data-preset="sprain">
+                        <i data-lucide="accessibility"></i> Ankle Sprain
+                    </button>
+                    <button type="button" class="preset-btn btn-secondary" id="preset-reset" title="Reset Form">
+                        <i data-lucide="rotate-ccw"></i> Reset
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <div class="dashboard-grid">
+            <!-- Sidebar: Inputs -->
+            <aside class="sidebar-panel">
+                <form id="triage-form" class="triage-form">
+                    <!-- Section: Patient Profile -->
+                    <div class="form-section">
+                        <h2 class="section-title"><i data-lucide="user"></i> Patient Demographics</h2>
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="age">Age (years)</label>
+                                <input type="number" id="age" name="age" min="0" max="120" placeholder="48" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sex">Sex</label>
+                                <select id="sex" name="sex" class="form-input">
+                                    <option value="">Select...</option>
+                                    <option value="M">Male (M)</option>
+                                    <option value="F">Female (F)</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="language">Language</label>
+                                <select id="language" name="language" class="form-input">
+                                    <option value="English">English</option>
+                                    <option value="Spanish">Spanish</option>
+                                    <option value="French">French</option>
+                                    <option value="Mandarin">Mandarin</option>
+                                    <option value="Arabic">Arabic</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="mental_status_triage">Mental Status</label>
+                                <select id="mental_status_triage" name="mental_status_triage" class="form-input">
+                                    <option value="alert">Alert</option>
+                                    <option value="drowsy">Drowsy</option>
+                                    <option value="unresponsive">Unresponsive / Altered</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section: Symptoms -->
+                    <div class="form-section">
+                        <h2 class="section-title"><i data-lucide="message-square"></i> Symptoms & Complaint</h2>
+                        <div class="form-group">
+                            <label for="symptoms">Chief Complaint Description (Symptom Text)*</label>
+                            <textarea id="symptoms" name="symptoms" placeholder="Describe symptoms in detail (e.g. crushing chest pain, difficulty breathing, fever...)" required class="form-input form-textarea"></textarea>
+                        </div>
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="chief_complaint_system">Chief Complaint System</label>
+                                <select id="chief_complaint_system" name="chief_complaint_system" class="form-input">
+                                    <option value="">[Auto-detect from text]</option>
+                                    <option value="cardiac">cardiac</option>
+                                    <option value="respiratory">respiratory</option>
+                                    <option value="neurological">neurological</option>
+                                    <option value="gastrointestinal">gastrointestinal</option>
+                                    <option value="trauma">trauma</option>
+                                    <option value="renal">renal</option>
+                                    <option value="endocrine">endocrine</option>
+                                    <option value="dermatological">dermatological</option>
+                                    <option value="other">other</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="pain_score">Pain Score (0 - 10)</label>
+                                <div class="range-container">
+                                    <input type="range" id="pain_score" name="pain_score" min="0" max="10" step="1" value="5" class="form-range">
+                                    <span class="range-value" id="pain_score-val">5</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section: Vitals -->
+                    <div class="form-section">
+                        <div class="section-header-row">
+                            <h2 class="section-title"><i data-lucide="heart"></i> Clinical Vitals</h2>
+                            <button type="button" class="btn-text-only" id="btn-calc-news2" title="Calculate NEWS2 Score based on current vitals">
+                                <i data-lucide="calculator"></i> Calc NEWS2
+                            </button>
+                        </div>
+                        <div class="form-row-3">
+                            <div class="form-group">
+                                <label for="temperature_c">Temp (°C)</label>
+                                <input type="number" id="temperature_c" name="temperature_c" step="0.1" min="30" max="45" placeholder="37.5" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="heart_rate">Heart Rate (bpm)</label>
+                                <input type="number" id="heart_rate" name="heart_rate" min="20" max="250" placeholder="90" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="respiratory_rate">Resp Rate (bpm)</label>
+                                <input type="number" id="respiratory_rate" name="respiratory_rate" min="4" max="60" placeholder="17" class="form-input">
+                            </div>
+                        </div>
+                        <div class="form-row-3">
+                            <div class="form-group">
+                                <label for="spo2">SpO2 (%)</label>
+                                <input type="number" id="spo2" name="spo2" min="50" max="100" placeholder="97" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="systolic_bp">Systolic BP</label>
+                                <input type="number" id="systolic_bp" name="systolic_bp" min="40" max="260" placeholder="123" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="diastolic_bp">Diastolic BP</label>
+                                <input type="number" id="diastolic_bp" name="diastolic_bp" min="20" max="160" placeholder="75" class="form-input">
+                            </div>
+                        </div>
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="gcs_total">GCS Score (3-15)</label>
+                                <input type="number" id="gcs_total" name="gcs_total" min="3" max="15" placeholder="15" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="news2_score">NEWS2 Score</label>
+                                <input type="number" id="news2_score" name="news2_score" min="0" max="20" placeholder="2" class="form-input">
+                            </div>
+                        </div>
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="num_prior_ed_visits_12m">ED Visits (12m)</label>
+                                <input type="number" id="num_prior_ed_visits_12m" name="num_prior_ed_visits_12m" min="0" placeholder="1" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="num_prior_admissions_12m">Admissions (12m)</label>
+                                <input type="number" id="num_prior_admissions_12m" name="num_prior_admissions_12m" min="0" placeholder="0" class="form-input">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section: Queue Simulator -->
+                    <div class="form-section">
+                        <div class="section-header-row">
+                            <h2 class="section-title"><i data-lucide="users"></i> Queue State Simulator</h2>
+                            <button type="button" class="btn-text-only" id="btn-reset-queues" title="Restore default clinics queue state">
+                                <i data-lucide="refresh-cw"></i> Default State
+                            </button>
+                        </div>
+                        <p class="section-subtitle">Simulate real-time ED load to test intelligent patient routing weights</p>
+                        <div id="queue-simulator-container" class="queue-simulator-container">
+                            <!-- Dynamic Queue items will be rendered here by JS -->
+                        </div>
+                    </div>
+
+                    <button type="submit" class="submit-btn" id="btn-submit-triage">
+                        <span>Analyze Patient & Route</span> <i data-lucide="chevron-right"></i>
+                    </button>
+                </form>
+            </aside>
+
+            <!-- Main Content Area: Output & Analysis -->
+            <section class="main-panel" aria-label="Triage Analysis Output">
+                <nav class="tab-navigation" aria-label="Output format selection">
+                    <button type="button" class="tab-btn active" data-tab="visual" id="tab-visual-btn">
+                        <i data-lucide="layout-dashboard"></i> Clinical Dashboard
+                    </button>
+                    <button type="button" class="tab-btn" data-tab="raw-json" id="tab-raw-json-btn">
+                        <i data-lucide="code"></i> Raw API Payload
+                    </button>
+                </nav>
+
+                <!-- Tab Content: Visual Dashboard -->
+                <div class="tab-pane active" id="tab-visual">
+                    <!-- Placeholder/Empty State -->
+                    <div id="dashboard-empty-state" class="empty-state">
+                        <div class="empty-state-icon-container">
+                            <i data-lucide="clipboard-list" class="empty-icon animate-bounce"></i>
+                        </div>
+                        <h3>Ready for Patient Triage Analysis</h3>
+                        <p>Fill in patient details, symptoms, and clinical vitals in the sidebar, or select one of the clinical presets above, then click <strong>"Analyze Patient & Route"</strong>.</p>
+                    </div>
+
+                    <!-- Main Results Display -->
+                    <div id="dashboard-results" class="dashboard-results hidden">
+                        <!-- Top Row: KTAS Triage & Confidence & Safety alerts -->
+                        <div class="results-row-grid-2">
+                            <!-- KTAS Card -->
+                            <div class="card ktas-result-card" id="ktas-card">
+                                <div class="card-header">
+                                    <h3>KTAS Triage Classification</h3>
+                                    <span class="badge" id="badge-source">ml_v3</span>
+                                </div>
+                                <div class="ktas-value-display">
+                                    <div class="ktas-level-circle" id="ktas-level-display">5</div>
+                                    <div class="ktas-text-summary">
+                                        <h4 id="ktas-priority-title">Level 5 - Non-Urgent</h4>
+                                        <p id="ktas-priority-desc">Standard primary care timeline. Seen within 120 minutes.</p>
+                                    </div>
+                                </div>
+                                <div class="confidence-section">
+                                    <div class="confidence-label">
+                                        <span>Model Confidence:</span>
+                                        <strong id="confidence-percentage">92%</strong>
+                                    </div>
+                                    <div class="progress-bar-container">
+                                        <div class="progress-bar-fill" id="confidence-bar" style="width: 92%;"></div>
+                                    </div>
+                                    <p class="confidence-alert hidden" id="confidence-low-alert">
+                                        <i data-lucide="alert-triangle"></i> Low confidence. Clinical review recommended.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Safety & Overrides Card -->
+                            <div class="card safety-alerts-card" id="safety-card">
+                                <div class="card-header">
+                                    <h3>Clinical Guardrails & Safety</h3>
+                                    <i data-lucide="shield-check" class="status-shield-icon safe" id="safety-icon"></i>
+                                </div>
+                                <div class="safety-content" id="safety-alerts-list">
+                                    <!-- Dynamic safety triggers -->
+                                    <div class="no-safety-triggers">
+                                        <i data-lucide="check-circle" class="check-icon"></i>
+                                        <p>No safety overrides or warning flags triggered. The patient flow is guided by ML routing predictions.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Row 2: Specialty Routing & Queue Assignment -->
+                        <div class="results-row-grid-2">
+                            <!-- Specialty Card -->
+                            <div class="card specialty-result-card">
+                                <div class="card-header">
+                                    <h3>Specialty Prediction</h3>
+                                    <i data-lucide="stethoscope" class="header-icon"></i>
+                                </div>
+                                <div class="specialty-details">
+                                    <div class="route-block">
+                                        <label>Recommended Specialist</label>
+                                        <span class="route-value" id="spec-primary">General Practice</span>
+                                    </div>
+                                    <div class="route-block">
+                                        <label>Routed Specialty Queue</label>
+                                        <span class="route-value accent" id="spec-routed">General OPD</span>
+                                    </div>
+                                    <div class="reasoning-block">
+                                        <label>Clinical Matching Reason</label>
+                                        <p id="spec-reasoning">No specialty-specific signal detected. Routing conservatively.</p>
+                                    </div>
+                                </div>
+
+                                <div class="alternatives-section">
+                                    <h4>Alternative Clinical Fits</h4>
+                                    <div class="alternatives-list" id="spec-alternatives">
+                                        <!-- Rendered dynamically -->
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Queue routing Card -->
+                            <div class="card queue-assignment-card">
+                                <div class="card-header">
+                                    <h3>Intelligent Queue Assignment</h3>
+                                    <i data-lucide="git-merge" class="header-icon"></i>
+                                </div>
+                                <div class="queue-assignment-details">
+                                    <div class="assigned-queue-banner" id="queue-banner">
+                                        <span class="queue-label">Target Queue</span>
+                                        <h3 id="queue-assigned-name">General OPD</h3>
+                                        <span class="route-type-badge" id="queue-route-type">Primary</span>
+                                    </div>
+
+                                    <div class="queue-stats-grid">
+                                        <div class="stat-box">
+                                            <span class="stat-label">Queue Length</span>
+                                            <strong id="queue-stat-length">0 patients</strong>
+                                        </div>
+                                        <div class="stat-box">
+                                            <span class="stat-label">On-Duty Doctors</span>
+                                            <strong id="queue-stat-doctors">2</strong>
+                                        </div>
+                                        <div class="stat-box">
+                                            <span class="stat-label">Est. Wait Time</span>
+                                            <strong id="queue-stat-wait" class="accent-wait">--</strong>
+                                        </div>
+                                    </div>
+
+                                    <div class="decision-rationale-block">
+                                        <label>Routing Optimization Rationale</label>
+                                        <p id="queue-rationale">Clinically preferred route selected directly.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Row 3: Diagnostic Tests Recommendations -->
+                        <div class="card tests-recommendations-card">
+                            <div class="card-header">
+                                <h3>Recommended Diagnostic & Lab Tests</h3>
+                                <div class="card-header-actions">
+                                    <span class="badge badge-secondary" id="tests-source">rule_based_v1</span>
+                                </div>
+                            </div>
+                            <div class="tests-grid" id="recommended-tests-grid">
+                                <!-- Dynamic tests list -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Raw JSON Payload -->
+                <div class="tab-pane" id="tab-raw-json">
+                    <div class="json-viewer-container">
+                        <div class="json-panel">
+                            <div class="panel-header">
+                                <h4>Request Payload (JSON)</h4>
+                                <button type="button" class="copy-btn" id="btn-copy-req" title="Copy Request JSON"><i data-lucide="copy"></i> Copy</button>
+                            </div>
+                            <pre><code id="json-request-display">{}</code></pre>
+                        </div>
+                        <div class="json-panel">
+                            <div class="panel-header">
+                                <h4>Response Payload (JSON)</h4>
+                                <button type="button" class="copy-btn" id="btn-copy-res" title="Copy Response JSON"><i data-lucide="copy"></i> Copy</button>
+                            </div>
+                            <pre><code id="json-response-display">{}</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <footer class="app-footer">
+        <p>&copy; 2026 SmartQ Health Systems. AI Triage Service (Model version: <span id="app-model-version">v3</span>). For clinical playground and developer simulation testing only.</p>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

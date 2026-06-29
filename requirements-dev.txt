@@ -1,0 +1,4 @@
+-r requirements.txt
+lightgbm==4.6.0
+imbalanced-learn==0.14.0
+matplotlib==3.10.0
