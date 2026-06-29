@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartQ ML — Model Monitoring</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --txt:#e2e8f0; --mut:#94a3b8;
+          --ok:#22c55e; --watch:#f59e0b; --drift:#ef4444; --accent:#38bdf8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:24px 32px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+  h1 { font-size:20px; margin:0; }
+  header .sub { color:var(--mut); font-size:13px; margin-top:4px; }
+  button { background:var(--accent); color:#001; border:0; padding:9px 16px; border-radius:8px; font-weight:600; cursor:pointer; }
+  main { padding:24px 32px; max-width:1180px; margin:0 auto; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin-bottom:24px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .kpi .label { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .kpi .value { font-size:30px; font-weight:700; margin-top:6px; }
+  .kpi .note { color:var(--mut); font-size:12px; margin-top:4px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .panel h2 { font-size:14px; margin:0 0 14px; font-weight:600; }
+  .full { grid-column:1 / -1; }
+  .drift-row { display:flex; align-items:center; gap:12px; margin:8px 0; font-size:13px; }
+  .drift-row .name { width:140px; color:var(--mut); }
+  .bar { flex:1; height:18px; background:#0b1220; border-radius:5px; overflow:hidden; }
+  .bar > div { height:100%; }
+  .pill { font-size:11px; padding:2px 8px; border-radius:999px; font-weight:600; }
+  .stable{background:rgba(34,197,94,.15);color:var(--ok);} .watch{background:rgba(245,158,11,.15);color:var(--watch);} .drift{background:rgba(239,68,68,.15);color:var(--drift);}
+  .empty { color:var(--mut); padding:40px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>SmartQ ML — Model Monitoring</h1>
+    <div class="sub">Live triage classifier + length-of-stay regressor · prediction logging, accuracy/error tracking, PSI drift</div>
+  </div>
+  <button onclick="load()">↻ Refresh</button>
+</header>
+<main id="app"><div class="empty">Loading…</div></main>
+
+<script>
+const PSI_COLOR = { stable:'#22c55e', watch:'#f59e0b', drift:'#ef4444' };
+let charts = [];
+
+async function load() {
+  const r = await fetch('/monitoring/summary');
+  const s = await r.json();
+  const app = document.getElementById('app');
+  charts.forEach(c => c.destroy()); charts = [];
+
+  if (!s.total) { app.innerHTML = `<div class="empty">${s.message || 'No predictions yet.'}</div>`; return; }
+
+  const acc = s.triage_accuracy != null ? (s.triage_accuracy*100).toFixed(1)+'%' : '—';
+  const mae = s.los_mae_hours != null ? s.los_mae_hours.toFixed(3)+' h' : '—';
+
+  app.innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><div class="label">Predictions logged</div><div class="value">${s.total.toLocaleString()}</div>
+        <div class="note">${s.by_endpoint['/predict']} triage · ${s.by_endpoint['/predict-los']} LOS</div></div>
+      <div class="kpi"><div class="label">Live triage accuracy</div><div class="value">${acc}</div>
+        <div class="note">on ${s.triage_labelled_n.toLocaleString()} labelled cases</div></div>
+      <div class="kpi"><div class="label">Live LOS MAE</div><div class="value">${mae}</div>
+        <div class="note">on ${s.los_labelled_n.toLocaleString()} labelled cases</div></div>
+      <div class="kpi"><div class="label">Avg latency</div><div class="value">${s.avg_latency_ms ?? '—'}<span style="font-size:14px"> ms</span></div>
+        <div class="note">per prediction</div></div>
+    </div>
+    <div class="grid">
+      <div class="panel"><h2>Triage confidence distribution</h2><canvas id="conf"></canvas></div>
+      <div class="panel"><h2>Predicted triage class (KTAS 1–5)</h2><canvas id="cls"></canvas></div>
+      <div class="panel full"><h2>Feature drift — PSI vs training reference</h2><div id="drift"></div>
+        <div class="note" style="color:var(--mut);font-size:12px;margin-top:10px">
+          PSI &lt; 0.10 stable · 0.10–0.25 minor shift · &gt; 0.25 significant drift (retrain signal)</div></div>
+    </div>`;
+
+  const grid = { color:'#1f2c44' }, ticks = { color:'#94a3b8' };
+  charts.push(new Chart(conf, { type:'bar',
+    data:{ labels:s.confidence_histogram.bins, datasets:[{ data:s.confidence_histogram.counts, backgroundColor:'#38bdf8' }] },
+    options:{ plugins:{legend:{display:false}}, scales:{x:{grid,ticks},y:{grid,ticks}} } }));
+
+  const cd = s.triage_class_distribution;
+  charts.push(new Chart(cls, { type:'bar',
+    data:{ labels:Object.keys(cd), datasets:[{ data:Object.values(cd),
+      backgroundColor:['#ef4444','#f97316','#eab308','#22c55e','#06b6d4'] }] },
+    options:{ plugins:{legend:{display:false}}, scales:{x:{grid,ticks},y:{grid,ticks}} } }));
+
+  const d = document.getElementById('drift');
+  const entries = Object.entries(s.drift);
+  if (!entries.length) { d.innerHTML = '<div class="note" style="color:var(--mut)">Not enough live samples yet to assess drift.</div>'; }
+  else d.innerHTML = entries.map(([f,v]) => {
+    const pct = Math.min(100, v.psi/0.5*100);
+    return `<div class="drift-row"><span class="name">${f}</span>
+      <span class="bar"><div style="width:${pct}%;background:${PSI_COLOR[v.status]}"></div></span>
+      <span style="width:54px;text-align:right">${v.psi.toFixed(3)}</span>
+      <span class="pill ${v.status}">${v.status}</span></div>`;
+  }).join('');
+}
+load();
+</script>
+</body>
+</html>

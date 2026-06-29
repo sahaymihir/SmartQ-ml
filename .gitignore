@@ -9,8 +9,13 @@ __pycache__/
 logs/
 results/
 reports/
+monitoring.db
+.playwright-mcp/
 
 # Dataset CSVs — not tracked (hackathon/Kaggle data, kept local only)
 data/*.csv
 
 # Keep models/ tracked — this is an ML showcase repo.
+
+# Editor
+.vscode/

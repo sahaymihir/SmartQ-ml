@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,22 +16,14 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-try:
-    from specialty_hybrid import (
-        GENERAL_ROUTE,
-        SpecialtyPredictionRequest,
-        SpecialtyPredictionResponse,
-        normalize_symptoms_text,
-        predict_specialty,
-    )
-except ModuleNotFoundError:
-    from .specialty_hybrid import (
-        GENERAL_ROUTE,
-        SpecialtyPredictionRequest,
-        SpecialtyPredictionResponse,
-        normalize_symptoms_text,
-        predict_specialty,
-    )
+from . import monitoring
+from .specialty import (
+    GENERAL_ROUTE,
+    SpecialtyPredictionRequest,
+    SpecialtyPredictionResponse,
+    normalize_symptoms_text,
+    predict_specialty,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -38,8 +31,10 @@ logger = logging.getLogger("smartq-ml-service")
 
 CONFIDENCE_THRESHOLD = 0.60
 MODEL_VERSION = "v3"
-SERVICE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SERVICE_DIR.parent
+# app/ lives one level under the project root; models/ and static/ live at the root.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MODELS_DIR = PROJECT_ROOT / "models"
+STATIC_DIR = PROJECT_ROOT / "static"
 
 RECOMMENDATION_MAP: dict[int, str] = {
     1: "Immediate — resuscitation required",
@@ -129,6 +124,9 @@ class ModelArtifacts:
     categorical_defaults: dict[str, str]
     category_lookup: dict[str, dict[str, str]]
     model_class_labels: list[int]
+    # LOS regressor only; None for the triage classifier.
+    model_mae: float | None = None
+    baseline_mae: float | None = None
 
 
 class PredictionRequest(BaseModel):
@@ -182,6 +180,44 @@ class PredictionResponse(BaseModel):
     low_confidence: bool
     recommendation: str
     all_class_probs: dict[str, float]
+
+
+class LosRequest(BaseModel):
+    """Sparse clinical payload for length-of-stay prediction. All fields optional —
+    the service fills the rest from training medians/modes."""
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    age: int | None = Field(default=None, ge=0, le=130)
+    sex: str | None = None
+    triage_acuity: int | None = Field(default=None, ge=1, le=5)
+    chief_complaint_system: str | None = None
+    arrival_mode: str | None = None
+    mental_status_triage: str | None = None
+    temperature_c: float | None = Field(default=None, ge=0)
+    spo2: float | None = Field(default=None, ge=0, le=100)
+    heart_rate: float | None = Field(default=None, ge=0)
+    respiratory_rate: float | None = Field(default=None, ge=0)
+    systolic_bp: float | None = Field(default=None, ge=0)
+    diastolic_bp: float | None = Field(default=None, ge=0)
+    gcs_total: int | None = Field(default=None, ge=0, le=15)
+    pain_score: float | None = Field(default=None, ge=0, le=10)
+    news2_score: float | None = Field(default=None, ge=0)
+    num_comorbidities: int | None = Field(default=None, ge=0)
+    num_active_medications: int | None = Field(default=None, ge=0)
+    num_prior_ed_visits_12m: int | None = Field(default=None, ge=0)
+
+
+class LosResponse(BaseModel):
+    predicted_hours: float = Field(ge=0)
+    band_low: float = Field(ge=0)
+    band_high: float = Field(ge=0)
+    stay_category: str = Field(description="short <2h | medium 2-5h | long >5h")
+    model_mae_hours: float | None = None
+
+
+class OutcomeRequest(BaseModel):
+    prediction_id: int = Field(ge=1)
+    actual: float = Field(description="Observed triage class (1-5) or actual LOS in hours")
 
 
 class HealthResponse(BaseModel):
@@ -911,6 +947,48 @@ def load_artifacts() -> ModelArtifacts:
     return artifacts
 
 
+def load_los_artifacts() -> ModelArtifacts:
+    """Load the length-of-stay regression bundle into the shared ModelArtifacts shape."""
+    bundle_path = SERVICE_DIR / "models" / "los_v1" / "model" / "los_model_v1.pkl"
+    bundle = joblib.load(bundle_path)
+    encoders = bundle["feature_label_encoders"]
+    artifacts = ModelArtifacts(
+        model=bundle["model"],
+        scaler=bundle["scaler"],
+        feature_columns=list(bundle["selected_features"]),
+        numeric_columns=list(bundle["numeric_columns"]),
+        categorical_columns=list(bundle["categorical_columns"]),
+        feature_label_encoders=encoders,
+        target_encoder=None,
+        numeric_defaults=dict(bundle["numeric_defaults"]),
+        categorical_defaults=dict(bundle["categorical_defaults"]),
+        category_lookup=build_category_lookup(encoders),
+        model_class_labels=[],
+        model_mae=float(bundle["model_mae"]),
+        baseline_mae=float(bundle["baseline_mae"]),
+    )
+    logger.info("Loaded LOS artifacts from %s (MAE=%.3fh)", bundle_path, artifacts.model_mae)
+    return artifacts
+
+
+def run_los_inference(frame: pd.DataFrame, artifacts: ModelArtifacts) -> LosResponse:
+    predicted = max(0.0, float(artifacts.model.predict(frame)[0]))
+    mae = artifacts.model_mae or 0.0
+    if predicted < 2:
+        category = "short"
+    elif predicted <= 5:
+        category = "medium"
+    else:
+        category = "long"
+    return LosResponse(
+        predicted_hours=round(predicted, 2),
+        band_low=round(max(0.0, predicted - mae), 2),
+        band_high=round(predicted + mae, 2),
+        stay_category=category,
+        model_mae_hours=round(mae, 3),
+    )
+
+
 def normalize_categorical_value(field_name: str, raw_value: Any, artifacts: ModelArtifacts) -> str:
     encoder = artifacts.feature_label_encoders[field_name]
     fallback = artifacts.categorical_defaults.get(field_name, str(encoder.classes_[0]))
@@ -981,11 +1059,16 @@ def apply_engineered_features(row: dict[str, Any], artifacts: ModelArtifacts) ->
 
 
 def build_feature_frame(payload: PredictionRequest, artifacts: ModelArtifacts) -> pd.DataFrame:
+    return frame_from_provided(payload.model_dump(exclude_none=True), artifacts)
+
+
+def frame_from_provided(payload_data: dict[str, Any], artifacts: ModelArtifacts) -> pd.DataFrame:
+    """Build a single-row model-ready frame from a sparse dict of provided values,
+    filling gaps with training defaults. Shared by the triage and LOS models."""
     row: dict[str, Any] = {}
-    payload_data = payload.model_dump(exclude_none=True)
 
     for feature in artifacts.feature_columns:
-        if feature in payload_data:
+        if feature in payload_data and payload_data[feature] is not None:
             row[feature] = payload_data[feature]
         elif feature in artifacts.numeric_columns:
             row[feature] = artifacts.numeric_defaults.get(feature, 0.0)
@@ -1034,7 +1117,13 @@ def run_inference(frame: pd.DataFrame, artifacts: ModelArtifacts) -> PredictionR
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    monitoring.init_db()
     app.state.artifacts = load_artifacts()
+    try:
+        app.state.los_artifacts = load_los_artifacts()
+    except Exception:
+        logger.exception("LOS model failed to load; /predict-los will be unavailable")
+        app.state.los_artifacts = None
     yield
 
 
@@ -1069,12 +1158,32 @@ async def root() -> RootResponse:
     )
 
 
+def _log_prediction(endpoint: str, payload: BaseModel, predicted: float, confidence: float | None, started: float) -> int | None:
+    """Persist a prediction for monitoring. Never let logging break inference."""
+    try:
+        return monitoring.log_prediction(
+            endpoint=endpoint,
+            inputs=payload.model_dump(exclude_none=True),
+            predicted=predicted,
+            confidence=confidence,
+            latency_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+    except Exception:
+        logger.exception("Failed to log prediction for monitoring")
+        return None
+
+
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(payload: PredictionRequest, request: Request) -> PredictionResponse:
     artifacts = get_artifacts(request)
+    started = time.perf_counter()
     try:
         frame = build_feature_frame(payload, artifacts)
-        return run_inference(frame, artifacts)
+        result = run_inference(frame, artifacts)
+        prediction_id = _log_prediction("/predict", payload, result.priority_class, result.confidence, started)
+        if prediction_id is not None:
+            request.app.state.last_prediction_id = prediction_id
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
@@ -1082,6 +1191,54 @@ async def predict(payload: PredictionRequest, request: Request) -> PredictionRes
     except Exception as exc:
         logger.exception("Prediction failed")
         raise HTTPException(status_code=500, detail="Prediction failed") from exc
+
+
+def get_los_artifacts(request: Request) -> ModelArtifacts:
+    artifacts = getattr(request.app.state, "los_artifacts", None)
+    if artifacts is None:
+        raise HTTPException(status_code=503, detail="LOS model is not loaded")
+    return artifacts
+
+
+@app.post("/predict-los", response_model=LosResponse)
+async def predict_los(payload: LosRequest, request: Request) -> LosResponse:
+    artifacts = get_los_artifacts(request)
+    started = time.perf_counter()
+    try:
+        frame = frame_from_provided(payload.model_dump(exclude_none=True), artifacts)
+        result = run_los_inference(frame, artifacts)
+        _log_prediction("/predict-los", payload, result.predicted_hours, None, started)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("LOS prediction failed")
+        raise HTTPException(status_code=500, detail="LOS prediction failed") from exc
+
+
+@app.post("/outcomes")
+async def outcomes(payload: OutcomeRequest) -> dict:
+    """Attach an observed ground truth (actual triage class or actual LOS) to a logged
+    prediction, so the monitoring dashboard can compute live accuracy / error."""
+    updated = monitoring.record_outcome(payload.prediction_id, payload.actual)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"No prediction with id {payload.prediction_id}")
+    return {"status": "recorded", "prediction_id": payload.prediction_id, "actual": payload.actual}
+
+
+@app.get("/monitoring/summary")
+async def monitoring_summary() -> dict:
+    return monitoring.summary()
+
+
+@app.get("/monitoring", response_class=HTMLResponse)
+async def monitoring_dashboard() -> HTMLResponse:
+    html_path = SERVICE_DIR / "static" / "monitoring.html"
+    if not html_path.exists():
+        raise HTTPException(status_code=404, detail="Monitoring dashboard file not found")
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
 
 
 @app.post("/specialty", response_model=SpecialtyPredictionResponse)
