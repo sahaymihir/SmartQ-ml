@@ -818,9 +818,9 @@ def canonicalize_category_token(value: str) -> str:
 def resolve_artifact_path(filename: str) -> Path:
     candidates = [
         # New structure: models/triage_v3/model/ (versioned artifact location)
-        SERVICE_DIR / "models" / "triage_v3" / "model" / filename,
+        PROJECT_ROOT / "models" / "triage_v3" / "model" / filename,
         # Fallback to models/ (for backward compatibility)
-        SERVICE_DIR / "models" / filename,
+        PROJECT_ROOT / "models" / filename,
         # Legacy: project root
         PROJECT_ROOT / filename,
         # Legacy: ml_service/models/
@@ -949,7 +949,7 @@ def load_artifacts() -> ModelArtifacts:
 
 def load_los_artifacts() -> ModelArtifacts:
     """Load the length-of-stay regression bundle into the shared ModelArtifacts shape."""
-    bundle_path = SERVICE_DIR / "models" / "los_v1" / "model" / "los_model_v1.pkl"
+    bundle_path = PROJECT_ROOT / "models" / "los_v1" / "model" / "los_model_v1.pkl"
     bundle = joblib.load(bundle_path)
     encoders = bundle["feature_label_encoders"]
     artifacts = ModelArtifacts(
@@ -1235,7 +1235,7 @@ async def monitoring_summary() -> dict:
 
 @app.get("/monitoring", response_class=HTMLResponse)
 async def monitoring_dashboard() -> HTMLResponse:
-    html_path = SERVICE_DIR / "static" / "monitoring.html"
+    html_path = PROJECT_ROOT / "static" / "monitoring.html"
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="Monitoring dashboard file not found")
     return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
@@ -1290,10 +1290,10 @@ async def playground():
     """
     Serves the clinical testing playground UI.
     """
-    html_path = SERVICE_DIR / "static" / "index.html"
+    html_path = PROJECT_ROOT / "static" / "index.html"
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="Playground UI file not found")
     return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
 
 # Mount the static directory for serving playground CSS/JS
-app.mount("/static", StaticFiles(directory=SERVICE_DIR / "static"), name="static")
+app.mount("/static", StaticFiles(directory=PROJECT_ROOT / "static"), name="static")
